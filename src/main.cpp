@@ -1,16 +1,31 @@
 #include "io_uring.hpp"
 #include "socket.hpp"
+#include "types.hpp"
 #include <asm-generic/socket.h>
 #include <asm/unistd_64.h>
+#include <cstring>
 #include <iostream>
 #include <linux/io_uring.h>
 #include <ostream>
+#include <string>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
+/// @brief Formats a basic RESP response.
+std::string handle_request(const char* buffer, int length)
+{
+  std::string req(buffer, length);
+
+  if (req.find("PING") != std::string::npos || req.find("ping") != std::string::npos)
+  {
+    return "+PONG\r\n";
+  }
+
+  return "+OK\r\n";
+}
 
 int main(void) {
   try 
@@ -23,6 +38,7 @@ int main(void) {
     int server_fd = create_server_socket(8080);
     std::cout << "TCP Server listening on port 8080 (FD: " << server_fd << ")" << std::endl;
 
+    // Arm initial ACCEPT request
     auto *accept_ctx = new EventContext{OpType::ACCEPT, server_fd, {}, 0};
     ring.submit_accept(server_fd, accept_ctx);
     ring.submit(1);
@@ -40,6 +56,7 @@ int main(void) {
         {
           std::cout << "\n[+] New client connected ! FD: " << client_fd << std::endl;
 
+          // Re-arm ACCEPT and arm initial READ for the new client
           ring.submit_accept(server_fd, accept_ctx);
 
           auto *read_ctx = new EventContext{OpType::READ, client_fd, {}, 0};
@@ -56,7 +73,15 @@ int main(void) {
           ctx->buffer[bytes_read] = '\0';
           std::cout << "[>] Receive from client (FD " << ctx->fd << ") : \n" << ctx->buffer << std::endl;
 
-          close(ctx->fd);
+          std::string response = handle_request(ctx->buffer, bytes_read);
+
+          // Queue WRITE response
+          auto *write_ctx = new EventContext{OpType::WRITE, ctx->fd, {}, 0};
+          std::memcpy(write_ctx->buffer, response.c_str(), response.size());
+          write_ctx->bytes_transferred = static_cast<int>(response.size());
+
+          ring.submit_write(ctx->fd, write_ctx);
+          ring.submit(1);
           delete ctx;
         }
         else
@@ -65,6 +90,16 @@ int main(void) {
           close(ctx->fd);
           delete ctx;
         }
+      }
+      else if (ctx->type == OpType::WRITE)
+      {
+        int client_fd = ctx->fd;
+        delete ctx;
+
+        // Re-arm READ for Keep-Alive connection
+        auto *next_read_ctx = new EventContext{OpType::READ, client_fd, {}, 0};
+        ring.submit_read(client_fd, next_read_ctx);
+        ring.submit(1);
       }
     }
 

@@ -11,6 +11,7 @@ int create_server_socket(int port)
     throw std::runtime_error("Error during socket creation");
   }
 
+  // Prevent "Address already in use" on quick restarts
   int enable = 1;
   if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0)
   {

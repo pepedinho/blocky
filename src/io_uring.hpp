@@ -4,8 +4,15 @@
 #include <linux/io_uring.h>
 #include <cstddef>
 
+/**
+ * @brief Wrapper around the Linux Kernel io_uring interface.
+ * 
+ * Manages memory-mapped rings, Submission Queue (SQ), Completion Queue (CQ),
+ * and underlying ring lifecycle.
+ */
 class IoUring {
 public:
+    /// @brief Submission Queue layout in shared memory.
     struct SQ {
         unsigned int* head = nullptr;
         unsigned int* tail = nullptr;
@@ -14,6 +21,7 @@ public:
         io_uring_sqe* sqes = nullptr;
     } sq;
 
+    /// @brief Completion Queue layout in shared memory.
     struct CQ {
         unsigned int* head = nullptr;
         unsigned int* tail = nullptr;
@@ -34,6 +42,7 @@ private:
     void cleanup();
 
 public:
+    /// @brief Initializes io_uring rings and memory mappings.
     explicit IoUring(unsigned int entries);
     ~IoUring();
 
@@ -42,8 +51,14 @@ public:
     IoUring(IoUring&&) = delete;
     IoUring& operator=(IoUring&&) = delete;
 
+    /// @brief Prepares an ACCEPT request.
     void submit_accept(int server_fd, EventContext* ctx);
+    /// @brief Prepares a READ request.
     void submit_read(int client_fd, EventContext* ctx);
+    /// @brief Prepares a WRITE request.
+    void submit_write(int client_fd, EventContext* ctx);
+    /// @brief Submits pending SQEs to the kernel.
     int submit(unsigned int to_submit);
+    /// @brief Waits for a completion event from CQ. (BLOCKING is CQ is empty)
     io_uring_cqe wait_cqe();
 };
