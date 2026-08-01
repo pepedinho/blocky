@@ -39,6 +39,8 @@ private:
     size_t cq_sz = 0;
     size_t sqes_sz = 0;
 
+    unsigned int pending_sqes = 0;
+
     void cleanup();
 
 public:
@@ -57,8 +59,10 @@ public:
     void submit_read(int client_fd, EventContext* ctx);
     /// @brief Prepares a WRITE request.
     void submit_write(int client_fd, EventContext* ctx);
-    /// @brief Submits pending SQEs to the kernel.
-    int submit(unsigned int to_submit);
+    /// @brief Sumbmit all accumulated pending SQEs to the kernel.
+    int flush();
+    /// @brief Returns the number of unsubmitted SQEs (Non-blocking).
+    [[nodiscard]] unsigned int pending() const noexcept { return pending_sqes; }
     /// @brief Waits for a completion event from CQ. (BLOCKING is CQ is empty)
     io_uring_cqe wait_cqe();
 };

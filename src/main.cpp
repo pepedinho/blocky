@@ -44,10 +44,11 @@ int main(void) {
     // Arm initial ACCEPT request
     auto *accept_ctx = pool.acquire(OpType::ACCEPT, server_fd);
     ring.submit_accept(server_fd, accept_ctx);
-    ring.submit(1);
+    ring.flush();
 
     while (true)
     {
+      ring.flush();
       struct io_uring_cqe cqe = ring.wait_cqe();
 
       auto *ctx = reinterpret_cast<EventContext*>(cqe.user_data);
@@ -64,8 +65,6 @@ int main(void) {
 
           auto *read_ctx = pool.acquire(OpType::READ, client_fd);
           ring.submit_read(client_fd, read_ctx);
-
-          ring.submit(2);
         }
       }
       else if (ctx->type == OpType::READ)
@@ -84,15 +83,12 @@ int main(void) {
           write_ctx->bytes_transferred = static_cast<int>(response.size());
 
           ring.submit_write(ctx->fd, write_ctx);
-          ring.submit(1);
-
           pool.release(ctx);
         }
         else
         {
           std::cout << "[-] Client disconected (FD " << ctx->fd << ")" << std::endl;
           close(ctx->fd);
-
           pool.release(ctx);
         }
       }
@@ -104,7 +100,6 @@ int main(void) {
         // Re-arm READ for Keep-Alive connection
         auto *next_read_ctx = pool.acquire(OpType::READ, client_fd);
         ring.submit_read(client_fd, next_read_ctx);
-        ring.submit(1);
       }
     }
 

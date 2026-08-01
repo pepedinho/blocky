@@ -70,6 +70,8 @@ void IoUring::submit_accept(int server_fd, EventContext* ctx) {
 
   sq.array[index] = index;
   *sq.tail = tail + 1;
+
+  pending_sqes++;
 }
 
 void IoUring::submit_read(int client_fd, EventContext* ctx) {
@@ -86,19 +88,8 @@ void IoUring::submit_read(int client_fd, EventContext* ctx) {
 
   sq.array[index] = index;
   *sq.tail = tail + 1;
-}
 
-int IoUring::submit(unsigned int to_submit) {
-  return syscall(__NR_io_uring_enter, this->ring_fd, to_submit, 0, 0, nullptr);
-}
-
-io_uring_cqe IoUring::wait_cqe() {
-  if (*cq.head == *cq.tail) {
-      syscall(__NR_io_uring_enter, ring_fd, 0, 1, IORING_ENTER_GETEVENTS, nullptr);
-  }
-  io_uring_cqe cqe = cq.cqes[*cq.head & *cq.ring_mask];
-  *cq.head = *cq.head + 1;
-  return cqe;
+  pending_sqes++;
 }
 
 void IoUring::submit_write(int client_fd, EventContext* ctx) {
@@ -115,4 +106,26 @@ void IoUring::submit_write(int client_fd, EventContext* ctx) {
 
   sq.array[index] = index;
   *sq.tail = tail + 1;
+
+  pending_sqes++;
+}
+
+io_uring_cqe IoUring::wait_cqe() {
+  if (*cq.head == *cq.tail) {
+      syscall(__NR_io_uring_enter, ring_fd, 0, 1, IORING_ENTER_GETEVENTS, nullptr);
+  }
+  io_uring_cqe cqe = cq.cqes[*cq.head & *cq.ring_mask];
+  *cq.head = *cq.head + 1;
+  return cqe;
+}
+
+int IoUring::flush() {
+  if (pending_sqes == 0) return 0;
+
+  int ret = syscall(__NR_io_uring_enter, this->ring_fd, pending_sqes, 0, 0, nullptr);
+  if (ret >= 0)
+  {
+    pending_sqes = 0;
+  }
+  return ret;
 }
