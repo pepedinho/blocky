@@ -1,4 +1,5 @@
 #include "io_uring.hpp"
+#include "object_pool.hpp"
 #include "socket.hpp"
 #include "types.hpp"
 #include <asm-generic/socket.h>
@@ -31,6 +32,8 @@ int main(void) {
   try 
   {
     IoUring ring(32);
+
+    ObjectPool<1024> pool;
     std::cout << "io_uring ready !" << std::endl;
     std::cout << "SQ Head:  " << *ring.sq.head << std::endl;
     std::cout << "CQ Head: " << *ring.cq.head << std::endl;
@@ -39,7 +42,7 @@ int main(void) {
     std::cout << "TCP Server listening on port 8080 (FD: " << server_fd << ")" << std::endl;
 
     // Arm initial ACCEPT request
-    auto *accept_ctx = new EventContext{OpType::ACCEPT, server_fd, {}, 0};
+    auto *accept_ctx = pool.acquire(OpType::ACCEPT, server_fd);
     ring.submit_accept(server_fd, accept_ctx);
     ring.submit(1);
 
@@ -57,9 +60,9 @@ int main(void) {
           std::cout << "\n[+] New client connected ! FD: " << client_fd << std::endl;
 
           // Re-arm ACCEPT and arm initial READ for the new client
-          ring.submit_accept(server_fd, accept_ctx);
+          ring.submit_accept(server_fd, ctx);
 
-          auto *read_ctx = new EventContext{OpType::READ, client_fd, {}, 0};
+          auto *read_ctx = pool.acquire(OpType::READ, client_fd);
           ring.submit_read(client_fd, read_ctx);
 
           ring.submit(2);
@@ -76,28 +79,30 @@ int main(void) {
           std::string response = handle_request(ctx->buffer, bytes_read);
 
           // Queue WRITE response
-          auto *write_ctx = new EventContext{OpType::WRITE, ctx->fd, {}, 0};
+          auto *write_ctx = pool.acquire(OpType::WRITE, ctx->fd);
           std::memcpy(write_ctx->buffer, response.c_str(), response.size());
           write_ctx->bytes_transferred = static_cast<int>(response.size());
 
           ring.submit_write(ctx->fd, write_ctx);
           ring.submit(1);
-          delete ctx;
+
+          pool.release(ctx);
         }
         else
         {
           std::cout << "[-] Client disconected (FD " << ctx->fd << ")" << std::endl;
           close(ctx->fd);
-          delete ctx;
+
+          pool.release(ctx);
         }
       }
       else if (ctx->type == OpType::WRITE)
       {
         int client_fd = ctx->fd;
-        delete ctx;
+        pool.release(ctx);
 
         // Re-arm READ for Keep-Alive connection
-        auto *next_read_ctx = new EventContext{OpType::READ, client_fd, {}, 0};
+        auto *next_read_ctx = pool.acquire(OpType::READ, client_fd);
         ring.submit_read(client_fd, next_read_ctx);
         ring.submit(1);
       }
