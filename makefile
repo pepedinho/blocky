@@ -5,7 +5,7 @@ SANFLAGS := -fsanitize=address,undefined
 BUILD_DIR := build
 TARGET    := $(BUILD_DIR)/kv_server
 
-SRCS := src/main.cpp src/io_uring.cpp src/socket.cpp
+SRCS := src/main.cpp src/io_uring.cpp src/socket.cpp src/resp.cpp
 OBJS := $(SRCS:src/%.cpp=$(BUILD_DIR)/%.o)
 DEPS := $(OBJS:.o=.d)
 

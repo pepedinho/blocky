@@ -1,9 +1,13 @@
 #include "io_uring.hpp"
 #include "object_pool.hpp"
+#include "resp.hpp"
 #include "socket.hpp"
 #include "types.hpp"
+#include <algorithm>
 #include <asm-generic/socket.h>
 #include <asm/unistd_64.h>
+#include <cctype>
+#include <cstddef>
 #include <cstring>
 #include <iostream>
 #include <linux/io_uring.h>
@@ -18,14 +22,38 @@
 /// @brief Formats a basic RESP response.
 std::string handle_request(const char* buffer, int length)
 {
-  std::string req(buffer, length);
 
-  if (req.find("PING") != std::string::npos || req.find("ping") != std::string::npos)
+  size_t consumed = 0;
+  auto parsed_cmd = RespParser::parse(buffer, static_cast<size_t>(length), consumed);
+
+  if (!parsed_cmd.has_value())
+    return "-ERR Protocol error or incomplete command\r\n";
+
+  std::string_view cmd_name = parsed_cmd->command();
+  char uppercase_cmd[16] = {0};
+  size_t len = std::min(cmd_name.size(), sizeof(uppercase_cmd) - 1);
+  for (size_t i = 0; i< len; ++i)
   {
+    uppercase_cmd[i] = static_cast<char>(std::toupper(cmd_name[i]));
+  }
+  
+  if (std::string_view(uppercase_cmd, len) == "PING") 
+  {
+    if (parsed_cmd->arg_count > 1)
+    {
+      std::string_view arg = parsed_cmd->args[1];
+      return '$' + std::to_string(arg.size()) + "\r\n" + std::string(arg) + "\r\n";
+    }
     return "+PONG\r\n";
   }
 
-  return "+OK\r\n";
+  if (std::string_view(uppercase_cmd, len) == "ECHO" && parsed_cmd->arg_count > 1)
+  {
+    std::string_view arg = parsed_cmd->args[1];
+    return "$" + std::to_string(arg.size()) + "\r\n" + std::string(arg) + "\r\n";
+  }
+
+  return "-ERR unknown command '" + std::string(cmd_name) + "'\r\n";
 }
 
 int main(void) {
