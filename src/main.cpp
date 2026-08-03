@@ -2,22 +2,19 @@
 #include "object_pool.hpp"
 #include "resp.hpp"
 #include "socket.hpp"
+#include "store.hpp"
 #include "types.hpp"
+
 #include <algorithm>
-#include <asm-generic/socket.h>
-#include <asm/unistd_64.h>
 #include <cctype>
-#include <cstddef>
 #include <cstring>
 #include <iostream>
-#include <linux/io_uring.h>
-#include <ostream>
+#include <optional>
 #include <string>
-#include <sys/mman.h>
-#include <sys/syscall.h>
+#include <string_view>
 #include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
+
+static Store g_store;
 
 /// @brief Formats a basic RESP response.
 std::string handle_request(const char* buffer, int length)
@@ -37,7 +34,8 @@ std::string handle_request(const char* buffer, int length)
     uppercase_cmd[i] = static_cast<char>(std::toupper(cmd_name[i]));
   }
   
-  if (std::string_view(uppercase_cmd, len) == "PING") 
+  std::string_view command(uppercase_cmd, len);
+  if (command == "PING") 
   {
     if (parsed_cmd->arg_count > 1)
     {
@@ -47,10 +45,87 @@ std::string handle_request(const char* buffer, int length)
     return "+PONG\r\n";
   }
 
-  if (std::string_view(uppercase_cmd, len) == "ECHO" && parsed_cmd->arg_count > 1)
+  if (command == "ECHO" && parsed_cmd->arg_count > 1)
   {
     std::string_view arg = parsed_cmd->args[1];
     return "$" + std::to_string(arg.size()) + "\r\n" + std::string(arg) + "\r\n";
+  }
+
+  if (command == "SET")
+  {
+    if (parsed_cmd->arg_count < 3)
+    {
+      return "-ERR wrong number of arguments for 'SET' command\r\n";
+    }
+
+    std::optional<int> ttl_sec = std::nullopt;
+
+    if (parsed_cmd->arg_count >= 5)
+    {
+      std::string_view opt = parsed_cmd->args[3];
+      if (opt == "EX" || opt == "ex")
+      {
+        ttl_sec = std::stoi(std::string(parsed_cmd->args[4]));
+      }
+    }
+
+    g_store.set(parsed_cmd->args[1], parsed_cmd->args[2], ttl_sec);
+    return "+OK\r\n";
+  }
+
+  if (command == "EXPIRE")
+  {
+    if (parsed_cmd->arg_count < 3)
+    {
+      return "-ERR wrong number of arguments for 'EXPIRE' command\r\n";
+    }
+    int seconds = std::stoi(std::string(parsed_cmd->args[2]));
+    bool ok = g_store.expire(parsed_cmd->args[1], seconds);
+    return ":" + std::to_string(ok ? 1 : 0) + "\r\n";
+  }
+
+  if (command == "TTL")
+  {
+    if (parsed_cmd->arg_count < 2)
+    {
+      return "-ERR wrong number of arguments for 'TTL' command\r\n";
+    }
+    int remaining = g_store.ttl(parsed_cmd->args[1]);
+    return ":" + std::to_string(remaining) + "\r\n";
+  }
+
+  if (command == "GET")
+  {
+    if (parsed_cmd->arg_count < 2)
+    {
+      return "-ERR wrong number of arguments for 'GET' command\r\n";
+    }
+    auto val = g_store.get(parsed_cmd->args[1]);
+    if (!val.has_value())
+    {
+      return "$-1\r\n";
+    }
+    return "$" + std::to_string(val->size()) + "\r\n" + std::string(*val) + "\r\n";
+  }
+
+  if (command == "DEL")
+  {
+    if (parsed_cmd->arg_count < 2)
+    {
+      return "-ERR wrong number of arguments for 'DEL' command\r\n";
+    }
+    bool deleted = g_store.del(parsed_cmd->args[1]);
+    return ":" + std::to_string(deleted ? 1 : 0) + "\r\n";
+  }
+
+  if (command == "EXISTS")
+  {
+    if (parsed_cmd->arg_count < 2)
+    {
+      return "-ERR wrong number of arguments for 'EXIST' command\r\n";
+    }
+    bool exist = g_store.exists(parsed_cmd->args[1]);
+    return ":" + std::to_string(exist ? 1 : 0) + "\r\n";
   }
 
   return "-ERR unknown command '" + std::string(cmd_name) + "'\r\n";
@@ -107,7 +182,9 @@ int main(void) {
 
           // Queue WRITE response
           auto *write_ctx = pool.acquire(OpType::WRITE, ctx->fd);
+
           std::memcpy(write_ctx->buffer, response.c_str(), response.size());
+          write_ctx->buffer[response.size()] = '\0';
           write_ctx->bytes_transferred = static_cast<int>(response.size());
 
           ring.submit_write(ctx->fd, write_ctx);

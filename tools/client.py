@@ -1,5 +1,6 @@
 import socket
 import sys
+import shlex
 
 
 def encode_resp_command(cmd_str: str) -> bytes:
@@ -7,7 +8,11 @@ def encode_resp_command(cmd_str: str) -> bytes:
     Transform string in RESP Protocol.
     Ex: "SET key val" -> *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$3\r\nval\r\n
     """
-    parts = cmd_str.strip().split()
+    try:
+        parts = shlex.split(cmd_str.strip())
+    except ValueError:
+        parts = cmd_str.strip().split()
+
     if not parts:
         return b""
     resp = f"*{len(parts)}\r\n"
