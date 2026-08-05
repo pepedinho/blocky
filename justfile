@@ -13,7 +13,7 @@ run: build
     @./{{ target }}
 
 client:
-    python3 ./tools/client.py 8080
+    uv run ./tools/client.py 8080
 
 nc-client:
     nc 127.0.0.1 8080
